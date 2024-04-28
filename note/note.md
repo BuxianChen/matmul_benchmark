@@ -244,7 +244,7 @@ $$
 
 `cublas_v2.h:cublasGemmEx`: [https://docs.nvidia.com/cuda/cublas/index.html#cublasgemmex](https://docs.nvidia.com/cuda/cublas/index.html#cublasgemmex), 支持出入参的存储类型选择, 运算时所用数据类型选择, 算法选择.
 
-下面接口里 `lda` 表示 leading dimension, 当 `transa=CUBLAS_OP_N` 时, `lda>=max(1,m)`, 否则 `lda>=max(1, k)`.
+下面接口里 `lda` 表示 leading dimension, 当 `transa=CUBLAS_OP_N` 时, `lda>=max(1,m)`, 且分配的空间必须至少为 `(lda>=m, k)`, 否则 `lda>=max(1, k)`, 且分配的空间至少为 `(lda>=k, m)`.
 
 可以参考这个 [youtube 视频](https://www.youtube.com/watch?v=PhjildK5oO8). lda 应该这么理解, 当矩阵 A 以列优先的方式进行存储的时候 (也就是先存储第一列, 再存储第二列, ...),
 
@@ -264,7 +264,7 @@ float *q = p + 4; // 我们将起始地址移到 a22 的未知
 q[j * M + i]  // 对于子矩阵 q 来说, M 就是所谓的 lda
 ```
 
-也就是说, 在列优先存储的情况下: lda 指的是, `A` 矩阵可能是某一个更大的矩阵的子矩阵, 而这个更大的子矩阵的行数就是 lda. 而 `transa=CUBLAS_OP_C` 时为什么 `lda>=max(1, k)`, 请看后文.
+也就是说, 在列优先存储的情况下: lda 指的是, `A` 矩阵可能是某一个更大的矩阵的子矩阵, 而这个更大的子矩阵的行数就是 lda.
 
 
 ```c++

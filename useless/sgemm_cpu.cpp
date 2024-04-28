@@ -43,9 +43,11 @@ int main() {
     float *C_alloc = new float[C_row * C_col];
 
     int transa = 0;
-    int transb = 0;
-    int lda = (transa == 0) ? A_row : A_col;
-    int ldb = (transb == 0) ? B_row : B_col;
+    int transb = 1;  // only need change this line to switch test case.
+
+    // ld{x} alway equals to allocated number of rows
+    int lda = A_row;
+    int ldb = B_row;
     int ldc = C_row;
 
     int A_start_i = 1, A_start_j = 2;
@@ -86,7 +88,7 @@ int main() {
             6+20*6, 7+20*6, 8+20*6,
         ]
 
-        C1: (2, 4):
+        C1=A@B^T: (2, 4)
         [
             3821,  4961,  6101,  7241,
             7037,  9137, 11237, 13337
@@ -99,7 +101,7 @@ int main() {
             6+20*5, 7+20*5, 8+20*5, 9+20*5
         ]
 
-        C2: (2, 4)
+        C2=A@B: (2, 4)
         [
             4942, 4999, 5056, 5113,
             9070, 9175, 9280, 9385
