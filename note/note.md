@@ -1,3 +1,4 @@
+# 杂记
 
 [https://github.com/leimao/CUDA-GEMM-Optimization](https://github.com/leimao/CUDA-GEMM-Optimization)
 
@@ -221,3 +222,122 @@ g++ -shared -o libmylib.so mylib.o mylib_v2.o
 g++ main.cpp -o main -L. -lmylib -Iheader
 ./main
 ```
+
+**关于 cublas 的 GEMM 相关的 API**
+
+目标是计算 (注意调用者需保证 A, B, C 矩阵都是按 col major 进行存储, 具体细节下面链接里的接口文档说明的很清楚):
+
+$$
+C=\alpha \text{op}(A) \text{op}(B) + \beta C \\ \text{op}(A): (m, k), \\ \text{op}(B): (k, n) \\ C: (m, n)
+$$
+
+其中:
+
+- `transa=CUBLAS_OP_N`: `op(A)=A`
+- `transa=CUBLAS_OP_T`: `op(A)=A^T`, 即转置
+- `transa=CUBLAS_OP_C`: `op(A)=A^H`, 即共轭转置
+
+
+`cublas_v2.h:cublasSgemm`: [https://docs.nvidia.com/cuda/cublas/index.html#cublas-t-gemm](https://docs.nvidia.com/cuda/cublas/index.html#cublas-t-gemm), `cublasSgemm` 是单精度 (float32, fp32) 矩阵乘法, `cublasDgemm` 是双精度 (float64), `cublasCgemm` 是单精度复数, `cublasZgemm` 是双精度复数, `cublasHgemm` 是半精度 (float16, fp16).
+
+`cublas_v2.h:cublasSgemmEx`: [https://docs.nvidia.com/cuda/cublas/index.html#cublas-t-gemmex](https://docs.nvidia.com/cuda/cublas/index.html#cublas-t-gemmex), `cublasCgemmEx` 是复数矩阵乘法. 注意运算过程使用 fp32 进行计算, 但入参和出参矩阵的精度可以低于 fp32. 也就是支持入参的存储类型选择, 但运算时所用数据类型固定为 fp32.
+
+`cublas_v2.h:cublasGemmEx`: [https://docs.nvidia.com/cuda/cublas/index.html#cublasgemmex](https://docs.nvidia.com/cuda/cublas/index.html#cublasgemmex), 支持出入参的存储类型选择, 运算时所用数据类型选择, 算法选择.
+
+下面接口里 `lda` 表示 leading dimension, 当 `transa=CUBLAS_OP_N` 时, `lda>=max(1,m)`, 否则 `lda>=max(1, k)`.
+
+可以参考这个 [youtube 视频](https://www.youtube.com/watch?v=PhjildK5oO8). lda 应该这么理解, 当矩阵 A 以列优先的方式进行存储的时候 (也就是先存储第一列, 再存储第二列, ...),
+
+```c++
+// M=3 是矩阵 A 的行数, N=4 是矩阵 A 的列数
+/*
+A = (
+    a11, a12, a13, a14,
+    a21, a22, a23, a24,
+    a31, a32, a33, a34
+)
+*/
+float *p = new float[M*N]  // 我们这里按列存储的方式存, 即 p = [a11, a21, a31, a12, a22, a32, a13, a23, a33, a14, a24, a34]
+float *q = p + 4; // 我们将起始地址移到 a22 的未知
+
+// 我们假设要知道以 q 作为左上角的子矩阵的 第 i 行与第 j 列的元素的值, 假设子矩阵的维度是 m * n, 应该这么计算:
+q[j * M + i]  // 对于子矩阵 q 来说, M 就是所谓的 lda
+```
+
+也就是说, 在列优先存储的情况下: lda 指的是, `A` 矩阵可能是某一个更大的矩阵的子矩阵, 而这个更大的子矩阵的行数就是 lda. 而 `transa=CUBLAS_OP_C` 时为什么 `lda>=max(1, k)`, 请看后文.
+
+
+```c++
+// 函数声明 (函数原型)
+
+// op(A) 矩阵是 m x k 的, 但是按列优先存储, op(B) 是 k * n 的, C 是 m * n 的
+cublasStatus_t cublasSgemm(
+    cublasHandle_t handle,
+    cublasOperation_t transa,
+    cublasOperation_t transb,
+    int m,
+    int n,
+    int k,
+    const float *alpha,  // 这里传的是指针
+    const float *A,
+    int lda,
+    const float *B,
+    int ldb,
+    const float *beta,  // 这里传的是指针
+    float *C,
+    int ldc
+)
+
+cublasStatus_t cublasSgemmEx(
+    cublasHandle_t handle,
+    cublasOperation_t transa,
+    cublasOperation_t transb,
+    int m,
+    int n,
+    int k,
+    const float    *alpha,
+    const void     *A,
+    cudaDataType_t Atype,
+    int lda,
+    const void     *B,
+    cudaDataType_t Btype,
+    int ldb,
+    const float    *beta,
+    void           *C,
+    cudaDataType_t Ctype,
+    int ldc)
+
+cublasStatus_t cublasGemmEx(
+    cublasHandle_t handle,
+    cublasOperation_t transa,
+    cublasOperation_t transb,
+    int m,
+    int n,
+    int k,
+    const void    *alpha,
+    const void     *A,
+    cudaDataType_t Atype,
+    int lda,
+    const void     *B,
+    cudaDataType_t Btype,
+    int ldb,
+    const void    *beta,
+    void           *C,
+    cudaDataType_t Ctype,
+    int ldc,
+    cublasComputeType_t computeType,
+    cublasGemmAlgo_t algo
+)
+```
+
+符合 `cublasSgemm` 接口形式的 CPU 代码可以这样实现: TODO `./useless/sgemm_cpu.cpp`
+
+最后, 我们来看下按 C 的 row major 应该怎么传参?
+
+```c++
+// A, B, C: row major, C = \alpha*A@B + \beta*C
+// A: (m, k), B: (k, n), C(m, n), lda>=k, ldb>=n, ldc>=n
+cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, alpha, B, ldb, A, lda, beta, C, ldc)
+```
+
+原因: TODO
