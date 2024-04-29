@@ -385,3 +385,50 @@ cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, n, m, k, alpha, B, ldb, A, lda, be
 原因: TODO
 
 因为行优先更符合 C++ 的习惯, 后续采用行优先的存储方案来实现矩阵乘法, 另外, 为降低实现难度, `cublasSgemm` 中的 `transa` 和 `transb` 之后都固定为 `CUBLAS_OP_N`. 因此用来作为参照组的 `cublasSgemm` 将会像上面的 row major 的方式进行调用.
+
+## Coalesced Memory Access & Memory bank (TODO, 这一节两个话题有点混淆)
+
+Coalesced Memory Access 是对全局内存的优化考虑, 而 memory bank 是对共享内存的优化考量, 两者没有交集.
+
+使用 shared memory 优于使用全局内存, 避免 bank conflict 优于有 bank conflict 的 shared memory 的使用
+
+- 官方资料: [https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#maximize-memory-throughput](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#maximize-memory-throughput)
+- 官方资料: [https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#shared-memory-5-x](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#shared-memory-5-x)
+- 博客: [https://leimao.github.io/blog/CUDA-Shared-Memory-Bank/](https://leimao.github.io/blog/CUDA-Shared-Memory-Bank/)
+
+
+以 V100 为例, shared memory per block 的大小为 49152 Byte, 这些字节被分为 32 组 (因此每组为 49152/32=1536 Byte), 每个组称为一个 bank, 每个 bank 在一个时钟周期内提供 32 bit (也就是 4 Byte) 个读写能力. 我们知道线程是以 32 个为一组同时执行的, 如果这 32 个线程分别访问 32 个 bank (在一个时钟周期内每个只能最多访问 4 Byte), 那么不会造成 bank conflict; 然而假设第一个线程访问 bank-1 的第 0-32 bit, 第二个线程访问 bank-1 的第 32-64 bit, 就会造成 bank conflict; 但是如果第一个线程和第二个线程访问的都是 bank-1 的 0-32 bit, 也不造成 bank conflict.
+
+注意: bank 的排布方式是交错的, 即 
+
+```c++
+// 第 0 号 bank 的内存地址包括:
+(0)~(32) bit, (1*32*32)~(1*32*32+32) bit, (2*32*32)~(2*32*32+32) bit, ..., (1535*32*32)~(1535*32*32+32) bit
+
+// 第 1 号 bank 的内存地址包括:
+(32)~(64) bit, (1*32*32+32)~(1*32*32+64) bit, (2*32*32+32)~(2*32*32+64) bit, ..., (1535*32*32+32)~(1535*32*32+64) bit
+```
+
+不启用任何优化选项: `nvcc useless/transpose.cu -o transpose -Xptxas -O0 && ./transpose`
+
+```
+1280 x 1280 Matrix
+Transpose Write Coalesced
+Latency: 10.381 ms
+Transpose Read Coalesced
+Latency: 8.656 ms
+Transpose Read and Write Coalesced
+Latency: 8.336 ms
+```
+
+启用 `O3` 优化选项: `nvcc useless/transpose.cu -o transpose -Xptxas -O3 && ./transpose`
+
+```
+1280 x 1280 Matrix
+Transpose Write Coalesced
+Latency: 0.941 ms
+Transpose Read Coalesced
+Latency: 1.215 ms
+Transpose Read and Write Coalesced
+Latency: 0.514 ms
+```
