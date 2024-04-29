@@ -1,6 +1,8 @@
 # 杂记
 
-[https://github.com/leimao/CUDA-GEMM-Optimization](https://github.com/leimao/CUDA-GEMM-Optimization)
+## CUDA-GEMM-Optimization 运行结果
+
+参照 [https://github.com/leimao/CUDA-GEMM-Optimization](https://github.com/leimao/CUDA-GEMM-Optimization) 的 README 进行单精度性能测试:
 
 `./build/src/profile_cuda_gemm_fp32`
 
@@ -141,7 +143,17 @@ profile_cuda_gemm_fp32: /mnt/include/profile_utils.cuh:352: std::pair<float, flo
 Aborted
 ```
 
-**关于 cublas_v2.h 和 cublas.h 的猜测**
+## 关于 cublas_v2.h 和 cublas.h (new-and-legacy-cublas-api) 的猜测
+
+官方描述: [https://docs.nvidia.com/cuda/cublas/index.html#new-and-legacy-cublas-api](https://docs.nvidia.com/cuda/cublas/index.html#new-and-legacy-cublas-api)
+
+总结如下:
+
+- 已经存在的上古代码里写的是 `#include <cublas.h>`, 这类代码的运行最终会指向 legacy API
+- 新开发建议 `#include <cublas_v2.h>`, 这类代码的运行最终会指向 new API, 需要注意的是, legacy API 里已经定义的符号例如 `cublasSgemm`, 在 `cublas_v2.h` 中, 实际上是 `cublasSgemm_v2`, 但是使用了宏定义将 `cublasSgemm`, 因此可以直接使用 `cublasSgemm` 这个符号, 但是需要注意的是这些与 legacy API 同名的函数可能会有不同的形参
+- 不要同时 include 两个头文件, 会引发编译错误. 备注: 实测下来发现如果 include 两个头文件, 把 `#include <cublas.h>` 放在 `#include <cublas_v2.h>` 之前, 有可能能通过编译及正常执行, 但是反过来则会报编译错误.
+
+以下是验证上面所描述情形的例子:
 
 ```
 header/
@@ -223,7 +235,7 @@ g++ main.cpp -o main -L. -lmylib -Iheader
 ./main
 ```
 
-**关于 cublas 的 GEMM 相关的 API**
+## cublas GEMM 相关 API
 
 目标是计算 (注意调用者需保证 A, B, C 矩阵都是按 col major 进行存储, 具体细节下面链接里的接口文档说明的很清楚):
 
@@ -243,6 +255,8 @@ $$
 `cublas_v2.h:cublasSgemmEx`: [https://docs.nvidia.com/cuda/cublas/index.html#cublas-t-gemmex](https://docs.nvidia.com/cuda/cublas/index.html#cublas-t-gemmex), `cublasCgemmEx` 是复数矩阵乘法. 注意运算过程使用 fp32 进行计算, 但入参和出参矩阵的精度可以低于 fp32. 也就是支持入参的存储类型选择, 但运算时所用数据类型固定为 fp32.
 
 `cublas_v2.h:cublasGemmEx`: [https://docs.nvidia.com/cuda/cublas/index.html#cublasgemmex](https://docs.nvidia.com/cuda/cublas/index.html#cublasgemmex), 支持出入参的存储类型选择, 运算时所用数据类型选择, 算法选择.
+
+---------
 
 下面接口里 `lda` 表示 leading dimension, 当 `transa=CUBLAS_OP_N` 时, `lda>=max(1,m)`, 且分配的空间必须至少为 `(lda>=m, k)`, 否则 `lda>=max(1, k)`, 且分配的空间至少为 `(lda>=k, m)`.
 
@@ -266,6 +280,27 @@ q[j * M + i]  // 对于子矩阵 q 来说, M 就是所谓的 lda
 
 也就是说, 在列优先存储的情况下: lda 指的是, `A` 矩阵可能是某一个更大的矩阵的子矩阵, 而这个更大的子矩阵的行数就是 lda.
 
+**layout**
+
+总之, 明确一个子矩阵需要 4 个参数: 一个指针指向子矩阵的起始地址, 子矩阵的行数, 列数, ld.
+
+在列优先的情况下:
+
+```C++
+// aij 表示逻辑上的第 i 行, 第 j 列的元素
+aij = A[j*lda+i];  // lda = 分配空间时的矩阵的行数
+```
+
+在行优先的情况下:
+
+```C++
+// aij 表示逻辑上的第 i 行, 第 j 列的元素
+aij = A[i*lda+j];  // lda = 分配空间时的矩阵的列数
+```
+
+----------------
+
+cublas 关于矩阵乘法的函数原型如下:
 
 ```c++
 // 函数声明 (函数原型)
@@ -332,12 +367,21 @@ cublasStatus_t cublasGemmEx(
 
 符合 `cublasSgemm` 接口形式的 CPU 代码可以这样实现: TODO `./useless/sgemm_cpu.cpp`
 
-最后, 我们来看下按 C 的 row major 应该怎么传参?
+最后, 我们来看下按 C 的 row major 应该怎么传参
 
 ```c++
-// A, B, C: row major, C = \alpha*A@B + \beta*C
-// A: (m, k), B: (k, n), C(m, n), lda>=k, ldb>=n, ldc>=n
-cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, alpha, B, ldb, A, lda, beta, C, ldc)
+// A, B, C: row major
+
+// C = \alpha*A@B + \beta*C
+// A: (m, k), B: (k, n), C(m, n)
+lda = k; ldb = n; ldc = n;
+cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, alpha, B, ldb, A, lda, beta, C, ldc)
+
+// C = \alpha*A@B^T + \beta*C
+lda = k, ldb = n, ldc = n;
+cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, n, m, k, alpha, B, ldb, A, lda, beta, C, ldc)
 ```
 
 原因: TODO
+
+因为行优先更符合 C++ 的习惯, 后续采用行优先的存储方案来实现矩阵乘法, 另外, 为降低实现难度, `cublasSgemm` 中的 `transa` 和 `transb` 之后都固定为 `CUBLAS_OP_N`. 因此用来作为参照组的 `cublasSgemm` 将会像上面的 row major 的方式进行调用.

@@ -20,6 +20,23 @@ make mm_test
 ./bin/release/mm_test -m 16 -n 16 -k 16
 ```
 
+## cublasSgemm equivalent implementation (finished)
+
+- `sgemm_gpu.cu`: `cublasSgemm` 函数的使用样例
+- `sgemm_cpu.cpp`: 与 `cublasSgemm` 接口完全对应的 C++ CPU 实现
+
+## different matmul implementations (TODO)
+
+以下实现与 `cublasSgemm` 的接口格式不一致, 并且不包含 `cublasSgemm` 提供的 `transa`, `transb` 参数, 在与 `cublasSgemm` 做对比时, 要注意 `cublasSgemm` 传递的实参. 另外 `cublasSgemm` 对 `alpha` 与 `beta` 传递的都是指针, 下面的实现里传递的是数据本身.
+
+```c++
+template <typename T>
+__global__ void gemm_vxx(size_t m, size_t n, size_t k, T alpha, T const* A,
+                         size_t lda, T const* B, size_t ldb, T beta, T* C,
+                         size_t ldc)
+```
+
+
 TODO:
 
 - 把 Makefile 写好一些, 把 .vscode 文件夹精简下, 感觉应该更多依赖于 Makefile 或 CMakeList 而不是依赖 .vscode/tasks.json 和 launch.json
