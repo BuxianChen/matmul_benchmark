@@ -11,13 +11,10 @@
 当前进度:
 
 mm_host.cpp: c++ 单进程实现
-mm_test.cu: 参考自 [https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#shared-memory](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#shared-memory)
 
 ```
 make build
 ./bin/release/main -m 16 -n 16 -k 16
-make mm_test
-./bin/release/mm_test -m 16 -n 16 -k 16
 ```
 
 ## cublasSgemm equivalent implementation (finished)
@@ -27,12 +24,12 @@ make mm_test
 
 ## different matmul implementations (TODO)
 
-以下实现与 `cublasSgemm` 的接口格式不一致, 并且不包含 `cublasSgemm` 提供的 `transa`, `transb` 参数, 在与 `cublasSgemm` 做对比时, 要注意 `cublasSgemm` 传递的实参. 另外 `cublasSgemm` 对 `alpha` 与 `beta` 传递的都是指针, 下面的实现里传递的是数据本身.
+以下实现与 `cublasSgemm` 的接口格式不一致, 并且不包含 `cublasSgemm` 提供的 `transa`, `transb` 参数, 在与 `cublasSgemm` 做对比时, 要注意 `cublasSgemm` 传递的实参.
 
 ```c++
 template <typename T>
-__global__ void gemm_vxx(size_t m, size_t n, size_t k, T alpha, T const* A,
-                         size_t lda, T const* B, size_t ldb, T beta, T* C,
+__global__ void gemm_vxx(size_t m, size_t n, size_t k, T const *alpha, T const* A,
+                         size_t lda, T const* B, size_t ldb, T const *beta, T* C,
                          size_t ldc)
 ```
 

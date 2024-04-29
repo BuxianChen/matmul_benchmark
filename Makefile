@@ -1,4 +1,2 @@
-build: include/mm_impl.hpp src/mm_host.cpp src/mm_utils.cpp src/main.cpp
-	g++ -Iinclude/ src/mm_host.cpp src/mm_utils.cpp src/main.cpp -o ./bin/release/main
-mm_test: include/mm_impl.hpp src/mm_host.cpp src/mm_utils.cpp src/mm_test.cu
-	nvcc -Iinclude/ src/mm_host.cpp src/mm_utils.cpp src/mm_test.cu -o ./bin/release/mm_test
+build: include/mm_impl.cuh src/mm_host.cpp src/mm_v0.cu src/mm_utils.cpp src/cuda_helper.cu src/main.cu
+	nvcc -Iinclude/ src/mm_host.cpp src/mm_utils.cpp src/mm_v0.cu src/cuda_helper.cu src/main.cu -o ./bin/release/main

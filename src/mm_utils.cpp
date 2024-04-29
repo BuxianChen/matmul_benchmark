@@ -22,35 +22,43 @@ int parse_cmdline_int(int argc, char **argv, char const *option, int default_val
         return default_value;
 }
 
-void print_matrix(float *matrix, int row, int col){
+void print_matrix(float *matrix, size_t row, size_t col){
     printf("[\n");
-    for (int i = 0; i < row; ++i)
+    for (size_t i = 0; i < row; ++i)
         {
             printf("[");
-            for (int j = 0; j < col; ++j)
+            for (size_t j = 0; j < col; ++j)
                 printf("%f, ", matrix[i*col+j]);
             printf("]\n");
         }
     printf("]\n");
 }
 
-void random_init(float *matrix, int row, int col){
+void random_init(float *matrix, size_t row, size_t col){
     // 创建随机数引擎
     std::random_device rd;
     std::mt19937 gen(rd()); // 使用 Mersenne Twister 算法
     // 创建-1到1之间的均匀分布
     std::uniform_real_distribution<> distribution(-1.0, 1.0);
 
-    for (int i = 0; i < row; i++)
-        for (int j = 0; j < col; j++)
+    for (size_t i = 0; i < row; i++)
+        for (size_t j = 0; j < col; j++)
             matrix[i*col+j] = distribution(gen);
 }
 
-void const_init(float *matrix, int row, int col, float value){
-    for (int i = 0; i < row; i++)
-        for (int j = 0; j < col; j++)
+void const_init(float *matrix, size_t row, size_t col, float value){
+    for (size_t i = 0; i < row; i++)
+        for (size_t j = 0; j < col; j++)
             matrix[i*col+j] = value;
 }
+
+void seq_init(float *matrix, size_t row, size_t col){
+    for (size_t i = 0; i < row; i++)
+        for (size_t j = 0; j < col; j++)
+            matrix[i*col+j] = i*col+j;
+}
+
+// TO REMOVE THESE:
 
 template<typename T>
 T get_value(T const *M, int row, int col, int i, int j){
