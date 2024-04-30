@@ -386,28 +386,73 @@ cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, n, m, k, alpha, B, ldb, A, lda, be
 
 因为行优先更符合 C++ 的习惯, 后续采用行优先的存储方案来实现矩阵乘法, 另外, 为降低实现难度, `cublasSgemm` 中的 `transa` 和 `transb` 之后都固定为 `CUBLAS_OP_N`. 因此用来作为参照组的 `cublasSgemm` 将会像上面的 row major 的方式进行调用.
 
-## Coalesced Memory Access & Memory bank (TODO, 这一节两个话题有点混淆)
+## Coalesced Memory Access
 
 Coalesced Memory Access 是对全局内存的优化考虑, 而 memory bank 是对共享内存的优化考量, 两者没有交集.
 
-使用 shared memory 优于使用全局内存, 避免 bank conflict 优于有 bank conflict 的 shared memory 的使用
-
 - 官方资料: [https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#maximize-memory-throughput](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#maximize-memory-throughput)
-- 官方资料: [https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#shared-memory-5-x](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#shared-memory-5-x)
-- 博客: [https://leimao.github.io/blog/CUDA-Shared-Memory-Bank/](https://leimao.github.io/blog/CUDA-Shared-Memory-Bank/)
+- 博客: [https://leimao.github.io/blog/CUDA-Coalesced-Memory-Access/](https://leimao.github.io/blog/CUDA-Coalesced-Memory-Access/)
 
+以下是从上面的博客中摘抄的所谓
 
-以 V100 为例, shared memory per block 的大小为 49152 Byte, 这些字节被分为 32 组 (因此每组为 49152/32=1536 Byte), 每个组称为一个 bank, 每个 bank 在一个时钟周期内提供 32 bit (也就是 4 Byte) 个读写能力. 我们知道线程是以 32 个为一组同时执行的, 如果这 32 个线程分别访问 32 个 bank (在一个时钟周期内每个只能最多访问 4 Byte), 那么不会造成 bank conflict; 然而假设第一个线程访问 bank-1 的第 0-32 bit, 第二个线程访问 bank-1 的第 32-64 bit, 就会造成 bank conflict; 但是如果第一个线程和第二个线程访问的都是 bank-1 的 0-32 bit, 也不造成 bank conflict.
-
-注意: bank 的排布方式是交错的, 即 
+> The global memory read is coalesced whereas the global memory write is not.
 
 ```c++
-// 第 0 号 bank 的内存地址包括:
-(0)~(32) bit, (1*32*32)~(1*32*32+32) bit, (2*32*32)~(2*32*32+32) bit, ..., (1535*32*32)~(1535*32*32+32) bit
+constexpr size_t div_up(size_t a, size_t b) { return (a + b - 1) / b; }
 
-// 第 1 号 bank 的内存地址包括:
-(32)~(64) bit, (1*32*32+32)~(1*32*32+64) bit, (2*32*32+32)~(2*32*32+64) bit, ..., (1535*32*32+32)~(1535*32*32+64) bit
+template <typename T>
+__global__ void transpose_read_coalesced(T* output_matrix,
+                                         T const* input_matrix, size_t M,
+                                         size_t N)
+{
+    size_t const j{threadIdx.x + blockIdx.x * blockDim.x};
+    size_t const i{threadIdx.y + blockIdx.y * blockDim.y};
+    size_t const from_idx{i * N + j};
+    if ((i < M) && (j < N))
+    {
+        size_t const to_idx{j * M + i};
+        output_matrix[to_idx] = input_matrix[from_idx];
+    }
+}
+
+template <typename T>
+void launch_transpose_read_coalesced(T* output_matrix, T const* input_matrix,
+                                     size_t M, size_t N, cudaStream_t stream)
+{
+    constexpr size_t const warp_size{32};
+    dim3 const threads_per_block{warp_size, warp_size};
+    dim3 const blocks_per_grid{static_cast<unsigned int>(div_up(N, warp_size)),
+                               static_cast<unsigned int>(div_up(M, warp_size))};
+    transpose_read_coalesced<<<blocks_per_grid, threads_per_block, 0, stream>>>(
+        output_matrix, input_matrix, M, N);
+    CHECK_LAST_CUDA_ERROR();
+}
 ```
+
+这里仔细分析以下为什么是 read coalesced. 首先需要明确的是: `launch_transpose_read_coalesced` 的目标是将一个 row major, 且行数为 `M`, 列数为 `N` 的矩阵 `input_matrix` 转置, 注意 `output_matrix` 同样也是 row major 的, 也就是说期望的结果如下:
+
+```c++
+size_t M = 2, N = 3;
+float *input_matrix;  // {2, 4, 6, 8, 9, 10} <-> [[2, 4, 6], [8, 9, 10]]
+float *output_matrix;
+launch_transpose_read_coalesced(output_matrix, input_matrix, M, N, stream);
+// output_matrix: {2, 8, 4, 9, 6, 10} <-> [[2, 8], [4, 9], [6, 10]]
+```
+
+然后我们来看具体实现, 首先我们确认实现的正确性(此处从略): 注意 `block_per_grid.x = N / warp_size, block_per_grid.y = M / warp_size`, ...
+
+最后我们来看其为何是 read coalesced. 注意到 kernel function 中:
+
+```c++
+size_t const j{threadIdx.x + blockIdx.x * blockDim.x};  // threadIdx.x 是变化最快的维度, 因此 j 是随着 thread 连续变化的
+size_t const i{threadIdx.y + blockIdx.y * blockDim.y};  // 相邻 thread 的 i 基本上是相同的
+
+size_t const from_idx{i * N + j};  // from_idx 是随着 thread 连续变化的
+size_t const to_idx{j * M + i};    // to_idx 是随着 thread 跳跃变化的 (因为 j 是连续变化的, 而 j*M 造成跳跃变化)
+output_matrix[to_idx] = input_matrix[from_idx];  // input_matrix 是 read, output_matrix 是 write
+```
+
+TODO: REMOVE THIS: 博客中实现矩阵转置的执行结果
 
 不启用任何优化选项: `nvcc useless/transpose.cu -o transpose -Xptxas -O0 && ./transpose`
 
@@ -432,3 +477,48 @@ Latency: 1.215 ms
 Transpose Read and Write Coalesced
 Latency: 0.514 ms
 ```
+
+## Memory bank
+
+Coalesced Memory Access 是对全局内存的优化考虑, 而 memory bank 是对共享内存的优化考量, 两者没有交集.
+
+使用 shared memory 优于使用全局内存, 避免 bank conflict 优于有 bank conflict 的 shared memory 的使用
+
+- 官方资料: [https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#maximize-memory-throughput](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#maximize-memory-throughput)
+- 官方资料: [https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#shared-memory-5-x](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#shared-memory-5-x)
+- 博客: [https://leimao.github.io/blog/CUDA-Shared-Memory-Bank/](https://leimao.github.io/blog/CUDA-Shared-Memory-Bank/)
+
+
+以 V100 为例, shared memory per block 的大小为 49152 Byte, 这些字节被分为 32 组 (因此每组为 49152/32=1536 Byte), 每个组称为一个 bank, 每个 bank 在一个时钟周期内提供 32 bit (也就是 4 Byte) 个读写能力. 我们知道线程是以 32 个为一组同时执行的, 如果这 32 个线程分别访问 32 个 bank (在一个时钟周期内每个只能最多访问 4 Byte), 那么不会造成 bank conflict; 然而假设第一个线程访问 bank-1 的第 0-32 bit, 第二个线程访问 bank-1 的第 32-64 bit, 就会造成 bank conflict; 但是如果第一个线程和第二个线程访问的都是 bank-1 的 0-32 bit, 也不造成 bank conflict.
+
+注意: bank 的排布方式是交错的, 即 
+
+```c++
+// 第 0 号 bank 的内存地址包括:
+(0)~(32) bit, (1*32*32)~(1*32*32+32) bit, (2*32*32)~(2*32*32+32) bit, ..., (1535*32*32)~(1535*32*32+32) bit
+
+// 第 1 号 bank 的内存地址包括:
+(32)~(64) bit, (1*32*32+32)~(1*32*32+64) bit, (2*32*32+32)~(2*32*32+64) bit, ..., (1535*32*32+32)~(1535*32*32+64) bit
+```
+
+因此假设需要申请一块逻辑上是 2D 的 shared memory, 且同一个 block 且同一个 warp 中线程需要按行/列访问共享内存时, 推荐像这样申请一块 shared memory
+
+```c++
+BLOCK_SIZE = 32;
+__shared__ float buffer[BLOCK_SIZE][BLOCK_SIZE + 1];
+```
+
+好处是:
+
+- 假设 `block{i}-warp{j}-thread{0~31}` 需要分别访问 buffer 的一行 `buffer[k][0:32]`, 由于 buffer 是 row major 的, 且一个 float 刚好需要 32 bit, 因此 `buffer[k][0:32]` 分别属于不同的 bank, 这样同一个 warp 里的不同 thread 不会造成 banck confilct
+- 假设 `block{i}-warp{j}-thread{0~31}` 需要分别访问 buffer 的一列 `buffer[0:32][k]`, 由于 buffer 是 row major 的, 且一个 float 刚好需要 32 bit, 由于 buffer 的列数为 33, 因此 `buffer[0:32][k]` 也分别属于不同的 bank, 这样同一个 warp 里的不同 thread 也不会造成 banck confilct
+
+## A100 规格说明书
+
+[https://developer.download.nvidia.com/video/gputechconf/gtc/2020/presentations/s21819-optimizing-applications-for-nvidia-ampere-gpu-architecture.pdf](https://developer.download.nvidia.com/video/gputechconf/gtc/2020/presentations/s21819-optimizing-applications-for-nvidia-ampere-gpu-architecture.pdf), 比较有参考性, 也涉及了很多 GPU 的软硬件概念
+
+## 性能分析的提示
+
+在分析访存方面的性能分析时, 需要注意相邻的 thread 是属于同一个 warp 的, 它们每时每刻的指令都是相同的, warp 里的数据访问性能是关键.
+
+缓存行大小 (Cache Line Size) 一般都是 64 Byte / 128 Byte. 注意与 L1 Cache Size 和 L2 Cache Size 做区分, L1 Cache Size 一般可以做到几十 KB, L2 Cache Size 一般是 1M 左右 (A100 是 40M)

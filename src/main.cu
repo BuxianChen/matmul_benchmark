@@ -38,7 +38,7 @@ int main(int argc, char **argv){
     cudaMemcpy(B_device, B, k * ldb * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(C_device, C, m * ldc * sizeof(float), cudaMemcpyHostToDevice);
 
-    launch_gemm_kernel_v00(m, n, k, &alpha, A_device, lda, B_device, ldb, &beta, C_device, ldc, stream);
+    launch_gemm_kernel_v01(m, n, k, &alpha, A_device, lda, B_device, ldb, &beta, C_device, ldc, stream);
     cudaStreamSynchronize(stream);
     cudaMemcpy(C, C_device, m * ldc * sizeof(float), cudaMemcpyDeviceToHost);
 
