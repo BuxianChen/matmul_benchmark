@@ -1,12 +1,18 @@
 #include<cstdlib>
 
 template<typename T>
-void mm_host(size_t m, size_t n, size_t k,
+void mm_host(
+    size_t m,
+    size_t n,
+    size_t k,
     T const *alpha,
-    T const *A, size_t lda,
-    T const *B, size_t ldb,
+    T const *A,
+    size_t lda,
+    T const *B,
+    size_t ldb,
     T const *beta,
-    T *C, size_t ldc
+    T *C,
+    size_t ldc
 ){
     // T 是 basetype, const 与 * 都是修饰符 modifier
     // T const *A 表示指针指向的值不能修改, 而 T* const A 表示 A 本身不能修改
